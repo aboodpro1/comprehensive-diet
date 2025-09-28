@@ -157,11 +157,58 @@
         .toast.error {
             background-color: #EF4444; /* red-500 */
         }
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            max-width: 90%;
+            width: 450px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            transform: translateY(-20px);
+            transition: transform 0.3s ease-out;
+        }
+        .modal-overlay.open .modal-content {
+             transform: translateY(0);
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-gray-800">
 
     <div id="toast-notification" class="toast"></div>
+
+    <!-- Modal for Sharing Confirmation (The Change) -->
+    <div id="share-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 class="text-2xl font-bold text-emerald-600 mb-4" id="modal-title">تأكيد المشاركة العلنية</h3>
+            <p class="text-gray-600 mb-6" id="modal-message">يرجى إضافة عنوان أو ملاحظة لوصم خطتك قبل مشاركتها مع المجتمع.</p>
+            
+            <label for="share-note" class="block text-gray-700 font-semibold mb-2">عنوان أو ملاحظة (اختياري)</label>
+            <input type="text" id="share-note" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300" placeholder="مثال: خطة تخسيس لوزن 70 كجم">
+            
+            <div class="mt-6 flex justify-end gap-3">
+                <button onclick="closeShareModal()" class="bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-full hover:bg-gray-300 transition">
+                    إلغاء
+                </button>
+                <button id="confirm-share-btn" class="bg-blue-500 text-white font-bold py-2 px-4 rounded-full shadow-lg hover:bg-blue-600 transition">
+                    مشاركة
+                </button>
+            </div>
+        </div>
+    </div>
+    <!-- End Modal -->
 
     <div class="container mx-auto p-4 sm:p-6 lg:p-8 max-w-6xl">
         <header class="text-center mb-10">
@@ -260,7 +307,7 @@
                     </div>
                     <div class="mt-6 text-center flex flex-col sm:flex-row justify-center items-center gap-4">
                         <button onclick="calculateNeeds()" class="bg-emerald-500 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-emerald-600 transition w-full sm:w-auto">احسب احتياجاتي</button>
-                        <button id="save-needs-btn" onclick="saveMyNeeds()" class="bg-blue-500 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-blue-600 transition w-full sm:w-auto hidden">حفظ ومشاركة احتياجاتي</button>
+                        <button id="save-needs-btn" onclick="openShareModal('needs')" class="bg-blue-500 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-blue-600 transition w-full sm:w-auto hidden">حفظ ومشاركة احتياجاتي</button>
                     </div>
                     <div id="results-panel" class="mt-8 p-6 bg-slate-100 rounded-lg shadow-inner hidden">
                         <h4 class="text-xl font-bold text-gray-800 mb-4">الاحتياجات اليومية المقدرة:</h4>
@@ -310,9 +357,9 @@
                                      </ul>
                                 </div>
                                 <div class="mt-4 flex flex-col gap-2">
-                                     <button id="generate-plan-btn" onclick="generateMealPlan()" class="bg-purple-500 text-white font-bold py-3 px-4 rounded-full shadow-lg hover:bg-purple-600 transition flex items-center justify-center">
+                                     <button id="generate-plan-btn" onclick="openShareModal('plan')" class="bg-purple-500 text-white font-bold py-3 px-4 rounded-full shadow-lg hover:bg-purple-600 transition flex items-center justify-center">
                                          <span class="mr-2">✨</span>
-                                         <span>توليد خطة غذائية</span>
+                                         <span>توليد ومشاركة خطة غذائية</span>
                                          <div id="plan-loader" class="loader ml-2 hidden"></div>
                                      </button>
                                      <button id="generate-recipes-btn" onclick="generateRecipes()" class="bg-cyan-500 text-white font-bold py-3 px-4 rounded-full shadow-lg hover:bg-cyan-600 transition flex items-center justify-center">
@@ -380,6 +427,9 @@
     
     let sharedPlansList, noSharedPlansDiv, sharedPlansLoader;
 
+    // State for the sharing modal
+    let sharingContext = null; // 'needs' or 'plan'
+
     // Initialize Firebase
     if (Object.keys(firebaseConfig).length > 0) {
         app = initializeApp(firebaseConfig);
@@ -416,6 +466,7 @@
         sharedPlansLoader = document.getElementById('shared-plans-loader');
         
         document.getElementById('food-search').addEventListener('keyup', handleSearch);
+        document.getElementById('confirm-share-btn').addEventListener('click', confirmShareAndProceed); // Attach handler to new modal button
 
         showSection('macro');
         renderFoodList(foodDatabase);
@@ -492,35 +543,29 @@
         }
     }
 
-    async function saveSharedPlanToFirestore() {
-        if (!isFirebaseReady) {
-            console.error("Firebase is not ready, cannot save data.");
-            return;
-        }
-        try {
-            const sharedPlansCollection = collection(db, 'artifacts', appId, 'public', 'data', 'nutrition_plans');
-            const serializedPlan = JSON.stringify(myPlan);
-            await addDoc(sharedPlansCollection, {
-                userId: userId,
-                plan: serializedPlan,
-                totalCalories: calculateTotalCalories(myPlan),
-                type: 'meal_plan',
-                lastUpdated: new Date()
-            });
-            showToast("تمت مشاركة خطتك بنجاح!");
-            console.log("Shared plan saved successfully!");
-        } catch (e) {
-            console.error("Error adding shared plan document: ", e);
-            showToast("حدث خطأ أثناء مشاركة الخطة.", 'error');
-        }
-    }
-
-    window.saveMyNeeds = async function() {
+    /**
+     * New function to handle sharing logic after modal confirmation
+     */
+    window.confirmShareAndProceed = async function() {
+        const note = document.getElementById('share-note').value.trim();
+        closeShareModal();
+        
         if (!isFirebaseReady) {
             showToast("خدمة المزامنة غير جاهزة، يرجى المحاولة لاحقاً.", 'error');
             return;
         }
         
+        if (sharingContext === 'needs') {
+            await saveSharedNeedsToFirestore(note);
+        } else if (sharingContext === 'plan') {
+            await generateMealPlan(note, true); // True means share after generation
+        }
+        
+        // Reset context
+        sharingContext = null;
+    }
+
+    async function saveSharedNeedsToFirestore(note) {
         const age = parseInt(document.getElementById('age-input').value);
         const weight = parseInt(document.getElementById('weight-input').value);
         const gender = document.getElementById('gender-select').value;
@@ -546,16 +591,114 @@
                 carbs: totalCarbs,
                 fats: totalFats,
                 type: 'calculated_needs',
+                note: note, // Added note
                 lastUpdated: new Date()
             });
             showToast("تم حفظ ومشاركة بياناتك بنجاح!");
-            console.log("Calculated needs saved successfully!");
         } catch (e) {
             console.error("Error saving calculated needs: ", e);
             showToast("حدث خطأ أثناء حفظ البيانات.", 'error');
         }
     }
+
+    async function saveSharedPlanToFirestore(note, totalCalories) {
+        if (myPlan.length === 0) {
+            showToast("يجب أن تحتوي خطتك على عنصر واحد على الأقل للمشاركة.", 'error');
+            return;
+        }
+        try {
+            const sharedPlansCollection = collection(db, 'artifacts', appId, 'public', 'data', 'nutrition_plans');
+            const serializedPlan = JSON.stringify(myPlan);
+            await addDoc(sharedPlansCollection, {
+                userId: userId,
+                plan: serializedPlan,
+                totalCalories: totalCalories,
+                type: 'meal_plan',
+                note: note, // Added note
+                lastUpdated: new Date()
+            });
+            showToast("تمت مشاركة خطتك بنجاح!");
+        } catch (e) {
+            console.error("Error adding shared plan document: ", e);
+            showToast("حدث خطأ أثناء مشاركة الخطة.", 'error');
+        }
+    }
+
+    // Updated button handlers to open modal first
+    window.saveMyNeeds = function() {
+        // This function is now the entry point from the button, but it just calls the modal opener
+        const age = document.getElementById('age-input').value;
+        const weight = document.getElementById('weight-input').value;
+        if (!age || !weight) {
+            showToast("يرجى إدخال العمر والوزن أولاً.", 'error');
+            return;
+        }
+        openShareModal('needs');
+    }
+
+    window.generateMealPlan = async function(note = '', isShared = false) {
+        if (!isShared && myPlan.length === 0) {
+            showToast("أضف بعض الأطعمة إلى خطتك أولاً.", 'error');
+            return;
+        }
+        
+        // This is the AI generation part, moved from generateMealPlan
+        const totalCalories = document.getElementById('calories-result').textContent;
+        const totalProtein = document.getElementById('protein-result').textContent;
+        const totalCarbs = document.getElementById('carb-result').textContent;
+        const totalFats = document.getElementById('fat-result').textContent;
+        const totalCalcium = document.getElementById('calcium-result').textContent;
+        const age = document.getElementById('age-input').value;
+        const weight = document.getElementById('weight-input').value;
+        const gender = document.getElementById('gender-select').value === 'male' ? 'ذكر' : 'أنثى';
+
+        const prompt = `
+            أنشئ خطة وجبات ليوم واحد لشخص يبلغ من العمر ${age}، وزنه ${weight} كجم، وجنسه ${gender}. يجب أن تستهدف الخطة حوالي ${totalCalories} سعرة حرارية، و${totalProtein} بروتين، و${totalCarbs} كربوهيدرات، و${totalFats} دهون، و${totalCalcium} كالسيوم.
+            
+            قم بتضمين وجبات الإفطار والغداء والعشاء والوجبات الخفيفة. 
+            قدم الخطة بتنسيق HTML، مع استخدام قائمة غير مرتبة (<ul>) لكل وجبة، وعنوان (<h3>) لكل وجبة. استخدم تنسيقات جذابة.
+        `;
+        
+        if (isShared) {
+            // If confirmed from modal, first save the plan, then call AI.
+            await saveSharedPlanToFirestore(note, calculateTotalCalories(myPlan));
+        }
+
+        await callGeminiAPI(prompt, 'خطتك الغذائية اليومية', 'plan-loader');
+    }
+
+    window.openShareModal = function(context) {
+        sharingContext = context;
+        const modal = document.getElementById('share-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const shareNoteInput = document.getElementById('share-note');
+
+        if (context === 'needs') {
+            modalTitle.textContent = "مشاركة احتياجاتي اليومية";
+            modalMessage.textContent = "هل تريد مشاركة الاحتياجات اليومية المقدرة مع الآخرين؟ أضف عنوانًا للمساعدة في التحديد.";
+            shareNoteInput.placeholder = "مثال: خطة تخسيس لوزن 70 كجم";
+        } else if (context === 'plan') {
+             modalTitle.textContent = "مشاركة خطتي وتوليد وجبات";
+             modalMessage.textContent = "ستتم مشاركة خطتك الحالية مع المجتمع ومن ثم توليد وجبات مقترحة بناءً عليها. يرجى إضافة ملاحظة:";
+             shareNoteInput.placeholder = "مثال: خطة غذائية نباتية ليوم كامل";
+        }
+
+        shareNoteInput.value = ''; // Clear previous note
+        modal.classList.add('open');
+        modal.style.display = 'flex';
+    }
+
+    window.closeShareModal = function() {
+        const modal = document.getElementById('share-modal');
+        modal.classList.remove('open');
+        setTimeout(() => {
+            modal.style.display = 'none';
+        }, 300); // Match transition duration
+        sharingContext = null;
+    }
     
+    // Original deletePlan and renderSharedPlans remain the same, just showing the note now
     window.deletePlan = async function(planId) {
         if (!isFirebaseReady) {
             showToast("خدمة المزامنة غير جاهزة، يرجى المحاولة لاحقاً.", 'error');
@@ -592,18 +735,20 @@
             const planBox = document.createElement('div');
             const isOwner = planData.userId === userId;
             const deleteButtonHTML = isOwner ? `<button class="delete-btn" onclick="deletePlan('${planData.id}')" title="حذف">&times;</button>` : '';
-            
+            const noteDisplay = planData.note ? `<div class="text-sm font-semibold text-indigo-600 mt-2">${planData.note}</div>` : '';
+
             if (planData.type === 'calculated_needs') {
                 planBox.className = 'shared-needs-box bg-blue-100 p-4 rounded-lg shadow-sm border-t-2 border-blue-300';
                 planBox.innerHTML = `
-                    <div class="flex justify-between items-center">
+                    <div class="flex justify-between items-start">
                         <div class="flex-1">
                             <span class="font-bold text-gray-700">احتياجات مقدرة من: <span class="font-mono text-xs text-gray-500">${planData.userId}</span></span>
+                            ${noteDisplay}
                             <div class="text-sm text-gray-600 mt-1">السعرات الحرارية: ${planData.calories}</div>
                         </div>
                         ${deleteButtonHTML}
                     </div>
-                    <div class="mt-4 text-sm text-gray-700 space-y-1">
+                    <div class="mt-4 text-sm text-gray-700 space-y-1 border-t pt-2 border-blue-200">
                         <p><strong>العمر:</strong> ${planData.age} سنة، <strong>الوزن:</strong> ${planData.weight} كجم</p>
                         <p><strong>البروتين:</strong> ${planData.protein}، <strong>الكربوهيدرات:</strong> ${planData.carbs}، <strong>الدهون:</strong> ${planData.fats}</p>
                     </div>
@@ -611,9 +756,10 @@
             } else { // Assumed to be 'meal_plan'
                 planBox.className = 'shared-plan-box bg-slate-100 p-4 rounded-lg shadow-sm border-t-2 border-slate-300';
                 planBox.innerHTML = `
-                    <div class="flex justify-between items-center">
+                    <div class="flex justify-between items-start">
                         <div class="flex-1 cursor-pointer" onclick="toggleSharedPlanDetails('plan-details-${planData.id}')">
                             <span class="font-bold text-gray-700">خطة من المستخدم: <span class="font-mono text-xs text-gray-500">${planData.userId}</span></span>
+                            ${noteDisplay}
                             <div class="text-sm text-gray-600 mt-1">السعرات الحرارية: ${planData.totalCalories}</div>
                         </div>
                         <div class="flex items-center gap-4">
@@ -669,7 +815,7 @@
         }
     }
 
-    // --- Existing JavaScript from previous version, updated for Firebase ---
+    // --- Remaining functions remain the same (Chart, Macro/Micro details, food management) ---
     
     const macroChartCtx = document.getElementById('macroChart').getContext('2d');
     const macroChart = new Chart(macroChartCtx, {
@@ -836,7 +982,10 @@
         { name: 'بطاطا حلوة مطبوخة (100ج)', calories: 76, protein: 1.5, carbs: 17.7, fats: 0.1, calcium: 30, image: { emoji: '🍠', color: 'ea580c' } },
         { name: 'لحمة (100غ)', calories: 250, protein: 26, carbs: 0, fats: 17, calcium: 18, image: { emoji: '🥩', color: 'dc2626' } },
         { name: 'بطاطا (100غ)', calories: 77, protein: 2, carbs: 17, fats: 0.1, calcium: 12, image: { emoji: '🥔', color: 'facc15' } },
-        { name: 'سردين بالزيت (100غ)', calories: 255, protein: 22.3, carbs: 0, fats: 14.5, calcium: 24, image: { emoji: '🐟', color: '64748b' } }
+        { name: 'سردين بالزيت (100غ)', calories: 255, protein: 22.3, carbs: 0, fats: 14.5, calcium: 24, image: { emoji: '🐟', color: '64748b' } },
+        { name: 'لبن بقري كامل الدسم (150ج)', calories: 90, protein: 4.95, carbs: 7.05, fats: 4.5, calcium: 165, image: { emoji: '🥛', color: 'e0f2fe' } },
+        // NEW ITEM: MISK BoneVita Calcium Supplement (1 tablet)
+        { name: 'مكمل كالسيوم BoneVita (حبة)', calories: 0, protein: 0, carbs: 0, fats: 0, calcium: 500, image: { emoji: '💊', color: '7e22ce' }, notes: "يحتوي على 1000 وحدة دولية فيتامين D3 و 120 ميكروغرام فيتامين K2 لدعم امتصاص الكالسيوم وصحة العظام." }
     ];
 
     function handleSearch(event) {
@@ -858,7 +1007,7 @@
             button.innerHTML = `
                 <div class="food-image" style="background-color:#${food.image.color};">${food.image.emoji}</div>
                 <span class="text-sm font-semibold text-gray-800 text-center mt-2">${food.name}</span>
-                <span class="text-xs text-gray-500 mt-1">${food.calories} سعر حراري</span>
+                <span class="text-xs text-gray-500 mt-1">${food.calories} سعر حراري لكل وحدة</span>
             `;
             button.onclick = () => addFoodToPlan(food);
             foodListContainer.appendChild(button);
@@ -1055,33 +1204,6 @@
             }
         }
         await fetchWithRetry();
-    }
-    
-    window.generateMealPlan = async function() {
-        if (myPlan.length === 0) {
-            showToast("يجب أن تحتوي خطتك على عنصر واحد على الأقل للمشاركة.", 'error');
-            return;
-        }
-        
-        const totalCalories = document.getElementById('calories-result').textContent;
-        const totalProtein = document.getElementById('protein-result').textContent;
-        const totalCarbs = document.getElementById('carb-result').textContent;
-        const totalFats = document.getElementById('fat-result').textContent;
-        const totalCalcium = document.getElementById('calcium-result').textContent;
-        const age = document.getElementById('age-input').value;
-        const weight = document.getElementById('weight-input').value;
-        const gender = document.getElementById('gender-select').value === 'male' ? 'ذكر' : 'أنثى';
-
-        const prompt = `
-            أنشئ خطة وجبات ليوم واحد لشخص يبلغ من العمر ${age}، وزنه ${weight} كجم، وجنسه ${gender}. يجب أن تستهدف الخطة حوالي ${totalCalories} سعرة حرارية، و${totalProtein} بروتين، و${totalCarbs} كربوهيدرات، و${totalFats} دهون، و${totalCalcium} كالسيوم.
-            
-            قم بتضمين وجبات الإفطار والغداء والعشاء والوجبات الخفيفة. 
-            قدم الخطة بتنسيق HTML، مع استخدام قائمة غير مرتبة (<ul>) لكل وجبة، وعنوان (<h3>) لكل وجبة. استخدم تنسيقات جذابة.
-        `;
-        
-        await saveSharedPlanToFirestore();
-
-        await callGeminiAPI(prompt, 'خطتك الغذائية اليومية', 'plan-loader');
     }
     
     window.generateRecipes = async function() {
